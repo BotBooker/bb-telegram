@@ -5,48 +5,55 @@ import (
 	"os"
 	"time"
 
-	"github.com/nil-go/konf"
-	"github.com/nil-go/konf/provider/env"
-	"github.com/nil-go/konf/provider/file"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+
 	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v3"
 )
 
+// Config holds all configuration for the Telegram bot.
 type Config struct {
-	Server   ServerConfig   `konf:"server"`
-	Telegram TelegramConfig `konf:"telegram"`
-	API      APIConfig      `konf:"api"`
-	Logging  LoggingConfig  `konf:"logging"`
+	Server   ServerConfig   `koanf:"server"`
+	Telegram TelegramConfig `koanf:"telegram"`
+	API      APIConfig      `koanf:"api"`
+	Logging  LoggingConfig  `koanf:"logging"`
 }
 
+// ServerConfig holds HTTP server configuration.
 type ServerConfig struct {
-	Port         string        `konf:"port,default=8081"`
-	ReadTimeout  time.Duration `konf:"read_timeout,default=30s"`
-	WriteTimeout time.Duration `konf:"write_timeout,default=30s"`
-	IdleTimeout  time.Duration `konf:"idle_timeout,default=60s"`
+	Port         string        `koanf:"port"`
+	ReadTimeout  time.Duration `koanf:"read_timeout"`
+	WriteTimeout time.Duration `koanf:"write_timeout"`
+	IdleTimeout  time.Duration `koanf:"idle_timeout"`
 }
 
+// TelegramConfig holds Telegram bot configuration.
 type TelegramConfig struct {
-	BotToken     string        `konf:"bot_token"`
-	UseWebhook   bool          `konf:"use_webhook,default=false"`
-	WebhookURL   string        `konf:"webhook_url"`
-	WebhookPath  string        `konf:"webhook_path,default=/webhook"`
-	PollInterval time.Duration `konf:"poll_interval,default=1s"`
+	BotToken     string        `koanf:"bot_token"`
+	UseWebhook   bool          `koanf:"use_webhook"`
+	WebhookURL   string        `koanf:"webhook_url"`
+	WebhookPath  string        `koanf:"webhook_path"`
+	PollInterval time.Duration `koanf:"poll_interval"`
 }
 
+// APIConfig holds API client configuration.
 type APIConfig struct {
-	BaseURL string        `konf:"base_url"`
-	APIKey  string        `konf:"api_key"`
-	Timeout time.Duration `konf:"timeout,default=10s"`
+	BaseURL string        `koanf:"base_url"`
+	APIKey  string        `koanf:"api_key"`
+	Timeout time.Duration `koanf:"timeout"`
 }
 
+// LoggingConfig holds logging configuration.
 type LoggingConfig struct {
-	Level string `konf:"level,default=info"`
-	JSON  bool   `konf:"json,default=false"`
+	Level string `koanf:"level"`
+	JSON  bool   `koanf:"json"`
 }
 
+// Load loads configuration from YAML file and environment variables.
 func Load() (*Config, error) {
-	cfg := konf.New()
+	k := koanf.New(".")
 
 	instance := os.Getenv("INSTANCE")
 	if instance == "" {
@@ -57,21 +64,21 @@ func Load() (*Config, error) {
 	log.Info().Msgf("using instance: %s", instance)
 	log.Info().Msgf("loading configuration from: %s", path)
 
-	if err := cfg.Load(file.New(path, file.WithUnmarshal(yaml.Unmarshal))); err != nil {
-		log.Warn().Err(err).Msgf("failed to load config file, using defaults")
+	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+		log.Warn().Err(err).Msg("failed to load config file, using defaults")
 	}
 
 	// Load from environment variables
-	if err := cfg.Load(env.New(env.WithPrefix(""))); err != nil {
+	if err := k.Load(env.Provider("", "_", nil), nil); err != nil {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
 
-	konf.SetDefault(cfg)
-
 	var config Config
-	if err := cfg.Unmarshal("", &config); err != nil {
+	if err := k.Unmarshal("", &config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
+
+	config.applyDefaults()
 
 	// Validate required fields
 	if err := config.Validate(); err != nil {
@@ -81,6 +88,35 @@ func Load() (*Config, error) {
 	return &config, nil
 }
 
+// applyDefaults sets sensible defaults for any unconfigured fields.
+func (c *Config) applyDefaults() {
+	if c.Server.Port == "" {
+		c.Server.Port = "8081"
+	}
+	if c.Server.ReadTimeout <= 0 {
+		c.Server.ReadTimeout = 30 * time.Second
+	}
+	if c.Server.WriteTimeout <= 0 {
+		c.Server.WriteTimeout = 30 * time.Second
+	}
+	if c.Server.IdleTimeout <= 0 {
+		c.Server.IdleTimeout = 60 * time.Second
+	}
+	if c.Telegram.WebhookPath == "" {
+		c.Telegram.WebhookPath = "/webhook"
+	}
+	if c.Telegram.PollInterval <= 0 {
+		c.Telegram.PollInterval = 1 * time.Second
+	}
+	if c.API.Timeout <= 0 {
+		c.API.Timeout = 10 * time.Second
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+}
+
+// Validate checks that required configuration fields are present.
 func (c *Config) Validate() error {
 	if c.Telegram.BotToken == "" {
 		return fmt.Errorf("telegram bot token is required (set TELEGRAM_BOT_TOKEN env var or telegram.bot_token in config)")
